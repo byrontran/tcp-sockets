@@ -1,7 +1,5 @@
 package transform
 
-import "fmt"
-
 func Encode(input string) string {
 	result := make([]byte, len(input))
 
@@ -9,8 +7,8 @@ func Encode(input string) string {
 		result[index] = input[index] + 1
 
 		// TODO @byrontran: Remove
-		fmt.Printf("Char at index %d: %c\n", index, input[index])
-		fmt.Printf("Encoded char: %c\n", result[index])
+		// fmt.Printf("Char at index %d: %c\n", index, input[index])
+		// fmt.Printf("Encoded char: %c\n", result[index])
 	}
 
 	return string(result)
