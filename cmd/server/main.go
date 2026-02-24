@@ -1,6 +1,8 @@
 package main
 
 import (
+  "os"
+  "flag"
 	"fmt"
 	"log"
 	"net"
@@ -8,9 +10,26 @@ import (
 )
 
 // is it fine that this is out of main scope?
-const BYTE_LIMIT = 256
+const byteLimit = 256
+
+const encodeFlag = "encode"
+const decodeFlag = "decode"
+
+const transformUsage = "Tell the TCP Server whether to encode or decode the passed message.\nEncode by default.\n"
+var transformFlag = flag.String("transform", encodeFlag, transformUsage)
 
 func main() {
+  flag.Parse()
+
+  transformMode := *transformFlag
+
+  if transformMode != encodeFlag && transformMode != decodeFlag {
+    fmt.Println("Server does not have valid instructions to handle messages from client.")
+    fmt.Println("Please pass flags `--transform {encode | decode} to the server. If blank, server encodes by default.")
+
+    os.Exit(1)
+  }
+
 	listener, err := net.Listen("tcp", ":8080")
 	if err != nil {
 		log.Fatal(err)
@@ -31,19 +50,26 @@ func main() {
 		go func(c net.Conn) {
 			fmt.Printf("Connection Accepted!\n")
 
-			buffer := make([]byte, BYTE_LIMIT)
+			buffer := make([]byte, byteLimit)
 			num_bytes, err := conn.Read(buffer)
 			if err != nil {
 				log.Fatal(err)
 			}
 
-			if num_bytes > BYTE_LIMIT {
+			if num_bytes > byteLimit {
 				fmt.Printf("This message exceeds the server's 256 character limit.\n")
 				c.Close()
 			}
 
-			encoded_str := transform.Encode(string(buffer))
-			fmt.Println(encoded_str)
+      var resulting_str string
+
+      if transformMode == encodeFlag {
+        resulting_str = transform.Encode(string(buffer))
+      } else {
+        resulting_str = transform.Decode(string(buffer))
+      }
+
+      fmt.Println(resulting_str)
 
 			c.Close()
 		}(conn)
