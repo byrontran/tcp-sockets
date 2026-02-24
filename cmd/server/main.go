@@ -20,7 +20,6 @@ var transformFlag = flag.String("transform", encodeFlag, transformUsage)
 
 func main() {
   flag.Parse()
-
   transformMode := *transformFlag
 
   if transformMode != encodeFlag && transformMode != decodeFlag {
@@ -29,6 +28,8 @@ func main() {
 
     os.Exit(1)
   }
+
+  fmt.Printf("Starting the TCP server with mode: [%s]\n", transformMode)
 
 	listener, err := net.Listen("tcp", ":8080")
 	if err != nil {
