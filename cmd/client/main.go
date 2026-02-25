@@ -1,8 +1,8 @@
 package main
 
 import (
-  "flag"
 	"context"
+	"flag"
 	"log"
 	"net"
 	"time"
@@ -14,8 +14,8 @@ const messageUsage = "Pass a message (ASCII characters, under 256 characters) to
 var messageFlag = flag.String("message", defaultMessage, messageUsage)
 
 func main() {
-  flag.Parse()
-  message := *messageFlag
+	flag.Parse()
+	message := *messageFlag
 
 	// implement a TCP client as a Dialer?
 	var dialer net.Dialer

@@ -1,11 +1,11 @@
 package main
 
 import (
-  "os"
-  "flag"
+	"flag"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"tcp-sockets/pkg/transform"
 )
 
@@ -16,20 +16,21 @@ const encodeFlag = "encode"
 const decodeFlag = "decode"
 
 const transformUsage = "Tell the TCP Server whether to encode or decode the passed message.\nEncode by default.\n"
+
 var transformFlag = flag.String("transform", encodeFlag, transformUsage)
 
 func main() {
-  flag.Parse()
-  transformMode := *transformFlag
+	flag.Parse()
+	transformMode := *transformFlag
 
-  if transformMode != encodeFlag && transformMode != decodeFlag {
-    fmt.Println("Server does not have valid instructions to handle messages from client.")
-    fmt.Println("Please pass flags `--transform {encode | decode} to the server. If blank, server encodes by default.")
+	if transformMode != encodeFlag && transformMode != decodeFlag {
+		fmt.Println("Server does not have valid instructions to handle messages from client.")
+		fmt.Println("Please pass flags `--transform {encode | decode} to the server. If blank, server encodes by default.")
 
-    os.Exit(1)
-  }
+		os.Exit(1)
+	}
 
-  fmt.Printf("Starting the TCP server with mode: [%s]\n", transformMode)
+	fmt.Printf("Starting the TCP server with mode: [%s]\n", transformMode)
 
 	listener, err := net.Listen("tcp", ":8080")
 	if err != nil {
@@ -62,15 +63,15 @@ func main() {
 				c.Close()
 			}
 
-      var resulting_str string
+			var resulting_str string
 
-      if transformMode == encodeFlag {
-        resulting_str = transform.Encode(string(buffer))
-      } else {
-        resulting_str = transform.Decode(string(buffer))
-      }
+			if transformMode == encodeFlag {
+				resulting_str = transform.Encode(string(buffer))
+			} else {
+				resulting_str = transform.Decode(string(buffer))
+			}
 
-      fmt.Println(resulting_str)
+			fmt.Println(resulting_str)
 
 			c.Close()
 		}(conn)
