@@ -71,7 +71,13 @@ func main() {
 				resulting_str = transform.Decode(string(buffer))
 			}
 
-			fmt.Println(resulting_str)
+      fmt.Println(resulting_str)
+
+      // Instead of printing, write back to connection buffer?
+      _, err = conn.Write([]byte(resulting_str))
+      if err != nil {
+        log.Fatal(err)
+      }
 
 			c.Close()
 		}(conn)
