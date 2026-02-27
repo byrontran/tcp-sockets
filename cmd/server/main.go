@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -53,15 +54,16 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 	fmt.Printf("received connection from client: ")
 
 	// read client message into buffer for parsing
-	buffer := make([]byte, ctx.byteLimit)
+	buffer := make([]byte, ctx.byteLimit+1)
 	numBytes, readErr := c.Read(buffer)
 	if readErr != nil {
 		err = fmt.Errorf("failed to read message from buffer: %w", readErr)
 		return
 	}
 
-	// since our buffer is byteLimit, technically we'd never hit this
-	// but we'll keep this here just for fun
+	// because we check byteLimit + 1 into our buffer, we can check if
+	// the client sent 257 bytes instead of 256
+	// the prompt enforces "no more than 256 characters"
 	if numBytes > ctx.byteLimit {
 		err = fmt.Errorf("message exceeded server's byte limit (got: %d, wanted: %d)", numBytes, ctx.byteLimit)
 		// while this may throw an error, it isn't important enough to resend. the client is doing something bad after all
@@ -117,7 +119,18 @@ func runServer(srContext ServerRuntimeContext) error {
 	for {
 		conn, acceptErr := listener.Accept()
 		if acceptErr != nil {
-			return fmt.Errorf("encountered issue while accepting request: %w", acceptErr)
+			var opErr net.OpError
+			if errors.Is(acceptErr, &opErr) && opErr.Temporary() {
+				// don't want to fall over if the error is transient
+				// should cover timeouts and what-not (ECONNRESET, ECONNABORTED)
+				// technically shouldn't use Temporary() since it's deprecated
+				// but I don't know the alternative off the top of my head
+				// https://cs.opensource.google/go/go/+/refs/tags/go1.26.0:src/net/net.go;l=552
+				log.Printf("non-fatal issue occured during connection accept: %s", &opErr)
+				continue
+			} else {
+				return fmt.Errorf("fatal issue occured while accepting request: %w", acceptErr)
+			}
 		}
 
 		// in "net" package example, connection is handled in a
