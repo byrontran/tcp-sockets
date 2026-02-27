@@ -1,12 +1,14 @@
 # CS576 - TCP Sockets (Programming Assignment 1)
 
-**TODOS:**
+TCP client and server pair for the first CS 576: Networks and Distributed Systems group progrmaming project.
 
-- Server should write back to the connection with the encoded/decoded message. Client should print.
+**TODOs:**
+
+- ~~Server should write back to the connection with the encoded/decoded message. Client should print.~~
 - Put the client in an I/O loop for consistent message passing? Pass a flag for this mode perhaps.
-- Do more work in the error handling (as opposed to logging Fatal every time).
+- ~~Do more work in the error handling (as opposed to logging Fatal every time).~~
 
-### Notes for Teammates (Byron)
+## Note to Teammates
 
 I am not familiar with Go best practices nor the language, so if you happen to be and
 find style inconsistencies or poor practices anywhere feel free to correct or shout them
@@ -17,7 +19,9 @@ The server follows the "Listener" example, while the client follows the "Dialer"
 
 Link to the docs is here: https://pkg.go.dev/net
 
-# Running Instructions
+-- Byron
+
+## Running Instructions
 
 1. clone repo and cd into it
 2. `go build ./...` from project root directory
@@ -29,24 +33,27 @@ Link to the docs is here: https://pkg.go.dev/net
 > Can run the program without flags too. Default values are to encode the message, and for the
 > client to send "Hello World" to the server.
 
-# Program Specs
+### Flags
 
-Implement both a TCP client and TCP server.
+Both the client and server may be configured using additional flags to change the listening port (`-port`), byte limit (`-blimit`), and protocol (`-proto`). By default, these are set to `":8080"`, `256`, and `"tcp"`, respectively. Please run either the client or server with `-h` for more information.
+
+## Program Specifications
+
+- Implement both a TCP client and TCP server.
 - Any high level language with networking support (Initial choice: Go)
 
-## Server
+### Server
 
 - Server must accept a connection from a client, receives a text message with <= 256 chars.
 - Server encodes message by replacing each char with next char in ASCII sequence.
   - (e.g. "Hello World" becomes "Ifmmp!Xpsme")
 - Server responds with message converted to the encoded string.
 
-## Client:
+### Client:
 
 - Client must connect to server using same port.
 - Client must pass the message to the server.
 - Client receives encoded message from server and displays response.
-
 
 ### Optional Challenge
 

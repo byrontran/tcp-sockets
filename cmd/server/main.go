@@ -5,82 +5,162 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"tcp-sockets/pkg/transform"
 )
 
 // is it fine that this is out of main scope?
-const byteLimit = 256
+const (
+	// default values
+	BYTE_LIMIT  = 256
+	LISTEN_PORT = ":8080"
+	PROTO       = "tcp"
+	// flag names
+	ENCODE_FLAG = "encode"
+	DECODE_FLAG = "decode"
+	// usage flag help (shown with `-h` flag)
+	TRANSFORM_USAGE   = "Configure server to encode or decode the passed message."
+	LISTEN_PORT_USAGE = "Configure port for server to listen on."
+	PROTO_USAGE       = "Configure protcool for server to listen to."
+	BYTE_LIMIT_USAGE  = "Configure maximum bytes for server to accept."
+)
 
-const encodeFlag = "encode"
-const decodeFlag = "decode"
+type ServerRuntimeContext struct {
+	transformMode string
+	transformFunc func(string) string
+	listenPort    string
+	protocol      string
+	byteLimit     int
+}
 
-const transformUsage = "Tell the TCP Server whether to encode or decode the passed message.\nEncode by default.\n"
+func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan error) {
+	var err error
+	defer func() {
+		if err != nil {
+			reportingChan <- err
+		}
 
-var transformFlag = flag.String("transform", encodeFlag, transformUsage)
+		closeErr := c.Close()
+		if closeErr != nil {
+			closeErr = fmt.Errorf("failed to close %s connection cleanly: %w", ctx.protocol, closeErr)
+			reportingChan <- closeErr
+			return
+		}
+	}()
 
-func main() {
-	flag.Parse()
-	transformMode := *transformFlag
+	fmt.Printf("received connection from client: ")
 
-	if transformMode != encodeFlag && transformMode != decodeFlag {
-		fmt.Println("Server does not have valid instructions to handle messages from client.")
-		fmt.Println("Please pass flags `--transform {encode | decode} to the server. If blank, server encodes by default.")
-
-		os.Exit(1)
+	buffer := make([]byte, ctx.byteLimit)
+	numBytes, readErr := c.Read(buffer)
+	if readErr != nil {
+		err = fmt.Errorf("failed to read message from buffer: %w", readErr)
+		return
 	}
 
-	fmt.Printf("Starting the TCP server with mode: [%s]\n", transformMode)
+	if numBytes > ctx.byteLimit {
+		err = fmt.Errorf("message exceeded server's byte limit (got: %d, wanted: %d)", numBytes, ctx.byteLimit)
+		return
+	}
 
-	listener, err := net.Listen("tcp", ":8080")
+	// the buffer may include bytes that weren't filled, so we slice based on what we actually have
+	bufferedString := string(buffer[:numBytes])
+	receivedString := ctx.transformFunc((bufferedString))
+
+	fmt.Printf("message: %s, encoded: %s\n", bufferedString, receivedString)
+
+	// Instead of printing, write back to connection buffer?
+	// sends the message back to the client to confirm that we got it
+	_, writeErr := c.Write([]byte(receivedString))
+	if writeErr != nil {
+		err = fmt.Errorf("failed to write to connection buffer: %w", writeErr)
+		return
+	}
+}
+
+func runServer(srContext ServerRuntimeContext) error {
+	var err error
+	listener, err := net.Listen(srContext.protocol, srContext.listenPort)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("failed to create socket: %w", err)
 	}
 
-	defer listener.Close() // always close listener before process exits.
+	fmt.Printf("%s server listening on %s with transform directive: [%s]\n", srContext.protocol, srContext.listenPort, srContext.transformMode)
+
+	reportingChannel := make(chan error, 10) // arbitrary buffer size for formatting goroutine errors
+
+	// teardown logic
+	defer func() {
+		// I assume the chan will get closed on program exit, along with the goroutines.
+		closeErr := listener.Close() // always close listener before process exits.
+		if closeErr != nil {
+			err = fmt.Errorf("failed to close %s listener: %w", srContext.protocol, err)
+		}
+	}()
+
+	// consumer for reporting channel to stdout
+	go func() {
+		for reportedErr := range reportingChannel {
+			log.Printf("encountered issue with client request: %s\n", reportedErr)
+		}
+	}()
 
 	// Loop infinitely for pending connections
 	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Fatal(err)
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return fmt.Errorf("encountered issue while accepting request: %w", acceptErr)
 		}
 
 		// in "net" package example, connection is handled in a
 		// concurrent goroutine while the server continues listening
 		// for more acceptions. Do we want this in our implementation?
-		go func(c net.Conn) {
-			fmt.Printf("Connection Accepted!\n")
+		go handleUserResponse(srContext, conn, reportingChannel)
+	}
 
-			buffer := make([]byte, byteLimit)
-			num_bytes, err := conn.Read(buffer)
-			if err != nil {
-				log.Fatal(err)
-			}
+}
 
-			if num_bytes > byteLimit {
-				fmt.Printf("This message exceeds the server's 256 character limit.\n")
-				c.Close()
-			}
+// check if user passed a valid transform directive and return the associated function, else return error
+func validateTransform(transformDirective string) (func(string) string, error) {
+	switch transformDirective {
+	case ENCODE_FLAG:
+		return transform.Encode, nil
+	case DECODE_FLAG:
+		return transform.Decode, nil
+	}
+	return nil, fmt.Errorf("invalid transform provided: %s", transformDirective)
+}
 
-			var resulting_str string
+func parseArgs() (*ServerRuntimeContext, error) {
+	transformMode := flag.String("transform", ENCODE_FLAG, TRANSFORM_USAGE)
+	listenPort := flag.String("port", LISTEN_PORT, LISTEN_PORT_USAGE)
+	protocol := flag.String("proto", PROTO, PROTO_USAGE)
+	byteLimit := flag.Int("blimit", BYTE_LIMIT, BYTE_LIMIT_USAGE)
 
-			if transformMode == encodeFlag {
-				resulting_str = transform.Encode(string(buffer))
-			} else {
-				resulting_str = transform.Decode(string(buffer))
-			}
+	flag.Parse()
 
-      fmt.Println(resulting_str)
+	transformFunc, err := validateTransform(*transformMode)
+	if err != nil {
+		err = fmt.Errorf("%w\nPlease pass flags `--transform {encode | decode} to the server. If blank, server encodes by default.", err)
+		return nil, err
+	}
 
-      // Instead of printing, write back to connection buffer?
-      _, err = conn.Write([]byte(resulting_str))
-      if err != nil {
-        log.Fatal(err)
-      }
+	return &ServerRuntimeContext{
+		transformMode: *transformMode,
+		transformFunc: transformFunc,
+		listenPort:    *listenPort,
+		protocol:      *protocol,
+		byteLimit:     *byteLimit,
+	}, nil
+}
 
-			c.Close()
-		}(conn)
-
+func main() {
+	context, err := parseArgs()
+	if err != nil {
+		err = fmt.Errorf("failed to parse flags: %w", err)
+		log.Fatal(err)
+	}
+	err = runServer(*context)
+	if err != nil {
+		err = fmt.Errorf("%s connection closed due to error: %w", context.protocol, err)
+		log.Fatal(err)
 	}
 }
