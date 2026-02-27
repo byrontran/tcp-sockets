@@ -64,6 +64,8 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 	// but we'll keep this here just for fun
 	if numBytes > ctx.byteLimit {
 		err = fmt.Errorf("message exceeded server's byte limit (got: %d, wanted: %d)", numBytes, ctx.byteLimit)
+		// while this may throw an error, it isn't important enough to resend. the client is doing something bad after all
+		c.Write([]byte(err.Error()))
 		return
 	}
 
