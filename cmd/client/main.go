@@ -16,7 +16,7 @@ const (
 	LISTEN_PORT     = ":8080"
 	PROTO           = "tcp"
 	// usage flag help (shown with `-h` flag)
-	MESSAGE_USAGE     = "Pass a message (ASCII characters) to be messaged to the server for encoding/deoding."
+	MESSAGE_USAGE     = "Pass a message (ASCII characters) to send to a server for encoding/decoding."
 	LISTEN_PORT_USAGE = "Configure port for client to connect to."
 	PROTO_USAGE       = "Configure protcool for client to connect with."
 	BYTE_LIMIT_USAGE  = "Adjust bytes expected by/from the server."
@@ -24,7 +24,7 @@ const (
 
 type ClientRuntimeContext struct {
 	message    string
-	protocool  string
+	protocol   string
 	listenPort string
 	byteLimit  int
 }
@@ -35,11 +35,13 @@ func runClient(crContext ClientRuntimeContext) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	conn, err := dialer.DialContext(ctx, crContext.protocool, crContext.listenPort)
+	// open connectino to remove server
+	conn, err := dialer.DialContext(ctx, crContext.protocol, crContext.listenPort)
 	if err != nil {
 		return fmt.Errorf("failed to connect to remote server: %w", err)
 	}
 
+	// push message to remote server
 	_, err = conn.Write([]byte(crContext.message))
 	if err != nil {
 		return fmt.Errorf("failed to write to remote server: %w", err)
@@ -48,13 +50,14 @@ func runClient(crContext ClientRuntimeContext) error {
 	// Prepare to accept the response of the server
 	buffer := make([]byte, crContext.byteLimit)
 
-	_, err = conn.Read(buffer)
+	// read response from remote server
+	numBytes, err := conn.Read(buffer)
 	if err != nil {
 		return fmt.Errorf("failed to read server response: %w", err)
 	}
 
 	// server response
-	fmt.Printf("Message returned: %s\n", string(buffer))
+	fmt.Printf("Message returned: %s\n", string(buffer[:numBytes]))
 
 	// cleanup TCP connection
 	err = conn.Close()
@@ -65,6 +68,7 @@ func runClient(crContext ClientRuntimeContext) error {
 	return nil
 }
 
+// parse command line arguments, with defaults
 func parseArgs() *ClientRuntimeContext {
 	message := flag.String("message", DEFAULT_MESSAGE, MESSAGE_USAGE)
 	protcol := flag.String("proto", PROTO, PROTO_USAGE)
@@ -75,7 +79,7 @@ func parseArgs() *ClientRuntimeContext {
 
 	return &ClientRuntimeContext{
 		message:    *message,
-		protocool:  *protcol,
+		protocol:   *protcol,
 		listenPort: *listenPort,
 		byteLimit:  *byteLimit,
 	}

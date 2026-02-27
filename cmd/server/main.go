@@ -32,13 +32,16 @@ type ServerRuntimeContext struct {
 	byteLimit     int
 }
 
+// per-message client message handler
 func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan error) {
 	var err error
 	defer func() {
+		// if there is an error (i.e. function hit a != nil check and returned early), report it
 		if err != nil {
 			reportingChan <- err
 		}
 
+		// close the connection cleanly, or if that fails, report it
 		closeErr := c.Close()
 		if closeErr != nil {
 			closeErr = fmt.Errorf("failed to close %s connection cleanly: %w", ctx.protocol, closeErr)
@@ -49,6 +52,7 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 
 	fmt.Printf("received connection from client: ")
 
+	// read client message into buffer for parsing
 	buffer := make([]byte, ctx.byteLimit)
 	numBytes, readErr := c.Read(buffer)
 	if readErr != nil {
@@ -56,6 +60,8 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 		return
 	}
 
+	// since our buffer is byteLimit, technically we'd never hit this
+	// but we'll keep this here just for fun
 	if numBytes > ctx.byteLimit {
 		err = fmt.Errorf("message exceeded server's byte limit (got: %d, wanted: %d)", numBytes, ctx.byteLimit)
 		return
@@ -65,6 +71,7 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 	bufferedString := string(buffer[:numBytes])
 	receivedString := ctx.transformFunc((bufferedString))
 
+	// server logging to tell what the client sent and what we encoded it as
 	fmt.Printf("message: %s, encoded: %s\n", bufferedString, receivedString)
 
 	// Instead of printing, write back to connection buffer?
@@ -76,6 +83,7 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 	}
 }
 
+// long-lasting function to listen for messages until executation is interrupted
 func runServer(srContext ServerRuntimeContext) error {
 	var err error
 	listener, err := net.Listen(srContext.protocol, srContext.listenPort)
@@ -87,12 +95,12 @@ func runServer(srContext ServerRuntimeContext) error {
 
 	reportingChannel := make(chan error, 10) // arbitrary buffer size for formatting goroutine errors
 
-	// teardown logic
+	// teardown logic for the listener
 	defer func() {
 		// I assume the chan will get closed on program exit, along with the goroutines.
 		closeErr := listener.Close() // always close listener before process exits.
 		if closeErr != nil {
-			err = fmt.Errorf("failed to close %s listener: %w", srContext.protocol, err)
+			err = fmt.Errorf("failed to close %s listener: %w", srContext.protocol, closeErr)
 		}
 	}()
 
@@ -115,7 +123,6 @@ func runServer(srContext ServerRuntimeContext) error {
 		// for more acceptions. Do we want this in our implementation?
 		go handleUserResponse(srContext, conn, reportingChannel)
 	}
-
 }
 
 // check if user passed a valid transform directive and return the associated function, else return error
@@ -126,9 +133,10 @@ func validateTransform(transformDirective string) (func(string) string, error) {
 	case DECODE_FLAG:
 		return transform.Decode, nil
 	}
-	return nil, fmt.Errorf("invalid transform provided: %s", transformDirective)
+	return nil, fmt.Errorf("invalid transform provided: %s (expected: %s, %s)", transformDirective, ENCODE_FLAG, DECODE_FLAG)
 }
 
+// parse command line arguments, with defaults
 func parseArgs() (*ServerRuntimeContext, error) {
 	transformMode := flag.String("transform", ENCODE_FLAG, TRANSFORM_USAGE)
 	listenPort := flag.String("port", LISTEN_PORT, LISTEN_PORT_USAGE)
@@ -137,9 +145,10 @@ func parseArgs() (*ServerRuntimeContext, error) {
 
 	flag.Parse()
 
+	// might as well cache the transform function that we will use, since we are here
+	// saves us some cycles from needing an if-statement later
 	transformFunc, err := validateTransform(*transformMode)
 	if err != nil {
-		err = fmt.Errorf("%w\nPlease pass flags `--transform {encode | decode} to the server. If blank, server encodes by default.", err)
 		return nil, err
 	}
 
@@ -153,11 +162,14 @@ func parseArgs() (*ServerRuntimeContext, error) {
 }
 
 func main() {
+	// get parameters for server executation
 	context, err := parseArgs()
 	if err != nil {
 		err = fmt.Errorf("failed to parse flags: %w", err)
 		log.Fatal(err)
 	}
+
+	// spin up the listener for the server
 	err = runServer(*context)
 	if err != nil {
 		err = fmt.Errorf("%s connection closed due to error: %w", context.protocol, err)
