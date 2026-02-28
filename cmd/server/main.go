@@ -54,33 +54,47 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 		}
 	}()
 
-	reader := bufio.NewReader(c)
+	// report a non-fatal error to the server logs and the client if the client sends a message
+	// longer than 256 characters
+	reportSizeError := func() {
+		// since we have a fixed buffer size, we will only ever read byteLimit, so we can only
+		// report what we wanted from the client, not how much the client actually sent
+		err := fmt.Errorf("message exceeded server's byte limit (wanted: %d)\n", ctx.byteLimit)
+		reportingChan <- fmt.Errorf("got bad request from client: %w", err)
+		_, _ = fmt.Fprintf(c, "bad request: %s", err)
+	}
+
+	reader := bufio.NewReaderSize(c, ctx.byteLimit+1) // need +1 for the automatic newline added by the client
 
 	// need to handle client interactive mode, so we read the connection in a loop up to every newline
 	for {
 		// read stream up to a newline character
-		line, err := reader.ReadString('\n')
+		line, err := reader.ReadSlice('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				// EOF is sent by client on disconnect, so it's not quite an error
 				return
 			}
+			if errors.Is(err, bufio.ErrBufferFull) {
+				// if the buffer fills without a newline, we can assume that the message
+				// is longer than 256 characters (or blimit)
+				reportSizeError()
+				continue
+			}
 			reportingChan <- fmt.Errorf("failed to read from client: %w", err)
 			return
 		}
 
-		// remove the automatic newline sent by the client
-		message := strings.TrimSuffix(line, "\n")
-		messageLen := len(message)
-
 		// detect if the buffered message is longer than 256 bytes
-		// report a non-fatal error to the server logs and the client
+		messageLen := len(line)
 		if messageLen > ctx.byteLimit {
-			err := fmt.Errorf("message exceeded server's byte limit (got: %d, wanted: %d)\n", messageLen, ctx.byteLimit)
-			reportingChan <- fmt.Errorf("got bad request from client: %w", err)
-			_, _ = fmt.Fprintf(c, "bad request: %s", err)
+			// old code that shouldn't run thanks to the buffer limit above, but let's keep it anyway
+			reportSizeError()
 			continue
 		}
+
+		// remove the automatic newline sent by the client
+		message := strings.TrimSuffix(string(line), "\n")
 
 		// perform encoding/decoding on client
 		transformedMessage := ctx.transformFunc(message)
