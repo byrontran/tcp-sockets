@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"strings"
 	"tcp-sockets/pkg/transform"
 )
 
@@ -39,7 +42,7 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 	defer func() {
 		// if there is an error (i.e. function hit a != nil check and returned early), report it
 		if err != nil {
-			reportingChan <- err
+			reportingChan <- err // reportingChan kyou mou kawaii~!!
 		}
 
 		// close the connection cleanly, or if that fails, report it
@@ -51,39 +54,47 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 		}
 	}()
 
-	fmt.Printf("received connection from client: ")
+	reader := bufio.NewReader(c)
 
-	// read client message into buffer for parsing
-	buffer := make([]byte, ctx.byteLimit+1)
-	numBytes, readErr := c.Read(buffer)
-	if readErr != nil {
-		err = fmt.Errorf("failed to read message from buffer: %w", readErr)
-		return
-	}
+	// need to handle client interactive mode, so we read the connection in a loop up to every newline
+	for {
+		// read stream up to a newline character
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				// EOF is sent by client on disconnect, so it's not quite an error
+				return
+			}
+			reportingChan <- fmt.Errorf("failed to read from client: %w", err)
+			return
+		}
 
-	// because we check byteLimit + 1 into our buffer, we can check if
-	// the client sent 257 bytes instead of 256
-	// the prompt enforces "no more than 256 characters"
-	if numBytes > ctx.byteLimit {
-		err = fmt.Errorf("message exceeded server's byte limit (got: %d, wanted: %d)", numBytes, ctx.byteLimit)
-		// while this may throw an error, it isn't important enough to resend. the client is doing something bad after all
-		c.Write([]byte(err.Error()))
-		return
-	}
+		// remove the automatic newline sent by the client
+		message := strings.TrimSuffix(line, "\n")
+		messageLen := len(message)
 
-	// the buffer may include bytes that weren't filled, so we slice based on what we actually have
-	bufferedString := string(buffer[:numBytes])
-	receivedString := ctx.transformFunc((bufferedString))
+		// detect if the buffered message is longer than 256 bytes
+		// report a non-fatal error to the server logs and the client
+		if messageLen > ctx.byteLimit {
+			err := fmt.Errorf("message exceeded server's byte limit (got: %d, wanted: %d)\n", messageLen, ctx.byteLimit)
+			reportingChan <- fmt.Errorf("got bad request from client: %w", err)
+			_, _ = fmt.Fprintf(c, "bad request: %s", err)
+			continue
+		}
 
-	// server logging to tell what the client sent and what we encoded it as
-	fmt.Printf("message: %s, encoded: %s\n", bufferedString, receivedString)
+		// perform encoding/decoding on client
+		transformedMessage := ctx.transformFunc(message)
 
-	// Instead of printing, write back to connection buffer?
-	// sends the message back to the client to confirm that we got it
-	_, writeErr := c.Write([]byte(receivedString))
-	if writeErr != nil {
-		err = fmt.Errorf("failed to write to connection buffer: %w", writeErr)
-		return
+		fmt.Printf("message: %s, encoded: %s\n", message, transformedMessage)
+
+		// apparently we can use fmt.Fprintf instead of net.conn.Write since net.conn is a writer
+		// pretty neat....
+		// write the encoded (or decoded) response back to the client
+		_, err = fmt.Fprintf(c, "%s\n", transformedMessage)
+		if err != nil {
+			reportingChan <- fmt.Errorf("failed to write response: %w", err)
+			return
+		}
 	}
 }
 
@@ -119,14 +130,14 @@ func runServer(srContext ServerRuntimeContext) error {
 	for {
 		conn, acceptErr := listener.Accept()
 		if acceptErr != nil {
-			var opErr net.OpError
-			if errors.Is(acceptErr, &opErr) && opErr.Temporary() {
+			var opErr *net.OpError
+			if errors.As(acceptErr, &opErr) && opErr.Temporary() {
 				// don't want to fall over if the error is transient
 				// should cover timeouts and what-not (ECONNRESET, ECONNABORTED)
 				// technically shouldn't use Temporary() since it's deprecated
 				// but I don't know the alternative off the top of my head
 				// https://cs.opensource.google/go/go/+/refs/tags/go1.26.0:src/net/net.go;l=552
-				log.Printf("non-fatal issue occured during connection accept: %s", &opErr)
+				log.Printf("non-fatal issue occured during connection accept: %s\n", opErr)
 				continue
 			} else {
 				return fmt.Errorf("fatal issue occured while accepting request: %w", acceptErr)

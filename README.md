@@ -5,7 +5,7 @@ TCP client and server pair for the first CS 576: Networks and Distributed System
 **TODOs:**
 
 - ~~Server should write back to the connection with the encoded/decoded message. Client should print.~~
-- Put the client in an I/O loop for consistent message passing? Pass a flag for this mode perhaps.
+- ~~Put the client in an I/O loop for consistent message passing? Pass a flag for this mode perhaps.~~
 - ~~Do more work in the error handling (as opposed to logging Fatal every time).~~
 
 ## Note to Teammates
@@ -35,7 +35,11 @@ Link to the docs is here: https://pkg.go.dev/net
 
 ### Flags
 
-Both the client and server may be configured using additional flags to change the listening port (`-port`), byte limit (`-blimit`), and protocol (`-proto`). By default, these are set to `":8080"`, `256`, and `"tcp"`, respectively. Please run either the client or server with `-h` for more information.
+Both the client and server may be configured using additional flags to change the listening port (`-port`), byte limit (`-blimit`), and protocol (`-proto`). By default, these are set to `":8080"`, `256`, and `"tcp"`, respectively.
+
+The client may also be moved into an interactive mode using the flag `-interactive`.
+
+Please run either the client or server with `-h` for more information.
 
 ## Program Specifications
 
