@@ -15,17 +15,19 @@ import (
 // is it fine that this is out of main scope?
 const (
 	// default values
-	BYTE_LIMIT  = 256
-	LISTEN_PORT = ":8080"
-	PROTO       = "tcp"
+	BYTE_LIMIT_DEFAULT      = 256
+	LISTEN_PORT_DEFAULT     = ":8080"
+	PROTO_DEFAULT           = "tcp"
+	MAX_DRAIN_COUNT_DEFAULT = 3
 	// flag names
 	ENCODE_FLAG = "encode"
 	DECODE_FLAG = "decode"
 	// usage flag help (shown with `-h` flag)
-	TRANSFORM_USAGE   = "Configure server to encode or decode the passed message."
-	LISTEN_PORT_USAGE = "Configure port for server to listen on."
-	PROTO_USAGE       = "Configure protcool for server to listen to."
-	BYTE_LIMIT_USAGE  = "Configure maximum bytes for server to accept."
+	TRANSFORM_USAGE       = "Configure server to encode or decode the passed message."
+	LISTEN_PORT_USAGE     = "Configure port for server to listen on."
+	PROTO_USAGE           = "Configure protcool for server to listen to."
+	BYTE_LIMIT_USAGE      = "Configure maximum bytes for server to accept."
+	MAX_DRAIN_COUNT_USAGE = "Configure amount of times to attempt to clear connection buffer before giving up and disconnecting the client."
 )
 
 type ServerRuntimeContext struct {
@@ -34,79 +36,113 @@ type ServerRuntimeContext struct {
 	listenPort    string
 	protocol      string
 	byteLimit     int
+	maxDrainCount int
 }
 
 // per-message client message handler
 func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan error) {
-	var err error
 	defer func() {
-		// if there is an error (i.e. function hit a != nil check and returned early), report it
-		if err != nil {
-			reportingChan <- err // reportingChan wa kyou mou kawaii~!!
-		}
-
 		// close the connection cleanly, or if that fails, report it
 		closeErr := c.Close()
 		if closeErr != nil {
 			closeErr = fmt.Errorf("failed to close %s connection cleanly: %w", ctx.protocol, closeErr)
-			reportingChan <- closeErr
+			reportingChan <- closeErr // reportingChan wa kyou mou kawaii~!!
 			return
 		}
 	}()
-
-	// report a non-fatal error to the server logs and the client if the client sends a message
-	// longer than 256 characters
-	reportSizeError := func() {
-		// since we have a fixed buffer size, we will only ever read byteLimit, so we can only
-		// report what we wanted from the client, not how much the client actually sent
-		err := fmt.Errorf("message exceeded server's byte limit (wanted: %d)\n", ctx.byteLimit)
-		reportingChan <- fmt.Errorf("got bad request from client: %w", err)
-		_, _ = fmt.Fprintf(c, "bad request: %s", err)
-	}
 
 	reader := bufio.NewReaderSize(c, ctx.byteLimit+1) // need +1 for the automatic newline added by the client
 
 	// need to handle client interactive mode, so we read the connection in a loop up to every newline
 	for {
 		// read stream up to a newline character
-		line, err := reader.ReadSlice('\n')
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				// EOF is sent by client on disconnect, so it's not quite an error
+		line, readErr := reader.ReadSlice('\n')
+
+		if readErr == nil {
+			// since our buffer is ctx.byteLimit+1, we know that, once we strip the newline, we have byteLimit characters (<=256)
+			// remove the automatically added newline character
+			message := strings.TrimRight(string(line), "\n") // apparently Windows sends carriage returns... I don't like accomodating for Windows...
+
+			// perform encoding/decoding on client
+			transformedMessage := ctx.transformFunc(message)
+
+			fmt.Printf("message: %s, encoded: %s\n", message, transformedMessage)
+
+			// apparently we can use fmt.Fprintf instead of net.conn.Write since net.conn is a writer
+			// pretty neat....
+			// write the encoded (or decoded) response back to the client
+			_, readErr = fmt.Fprintf(c, "%s\n", transformedMessage)
+			if readErr != nil {
+				reportingChan <- fmt.Errorf("failed to write response: %w", readErr)
 				return
 			}
-			if errors.Is(err, bufio.ErrBufferFull) {
-				// if the buffer fills without a newline, we can assume that the message
-				// is longer than 256 characters (or blimit)
-				reportSizeError()
-				continue
-			}
-			reportingChan <- fmt.Errorf("failed to read from client: %w", err)
+		}
+
+		if errors.Is(readErr, io.EOF) {
+			// EOF is sent by client on disconnect, so it's not quite an error
+			// that would be worth reporting
 			return
 		}
 
-		// detect if the buffered message is longer than 256 bytes
-		messageLen := len(line)
-		if messageLen > ctx.byteLimit {
-			// old code that shouldn't run thanks to the buffer limit above, but let's keep it anyway
-			reportSizeError()
+		// if the buffer fills without a newline, we can assume that the message
+		// is longer than 256 characters (or blimit)
+		if errors.Is(readErr, bufio.ErrBufferFull) {
+			// if we had a super long messsage come in that does have a new line,
+			// we need this guard clause here to fully drain the message before
+			// resetting
+
+			// report a non-fatal error to the server logs and the client if the client sends a message
+			// longer than 256 characters
+			// since we have a fixed buffer size, we will only ever read byteLimit, so we can only
+			// report what we wanted from the client, not how much the client actually sent
+			oversizeErr := fmt.Sprintf("bad request from client: message exceeded server's byte limit (wanted: %d)\n", ctx.byteLimit)
+			fmt.Print(oversizeErr)
+			_, _ = fmt.Fprint(c, oversizeErr)
+
+			isDrained := false
+			drainCount := 0
+
+			// attempt to drain the connection of the big message until we give up
+			for !isDrained && drainCount < ctx.maxDrainCount { // I can't believe Golang doens't have a while loop keyword...
+				_, drainErr := reader.ReadSlice('\n')
+
+				// cases:
+				// - no error: found newline, drained successfully
+				// - EOF: client disconnected, can't fix this
+				// - buffer full: client must be a yapper
+				// - some other error: I have no clue what happened. It's probably unrecoverable.
+				if drainErr == nil {
+					// found the newline, big message was drained
+					isDrained = true // in a for-loop, we could break, but I hate break!
+				} else if errors.Is(drainErr, io.EOF) {
+					// EOF is sent by client on disconnect, so it's not quite an error
+					return
+				} else if errors.Is(drainErr, bufio.ErrBufferFull) {
+					drainCount++
+					continue
+				} else {
+					// whatever error this was, it must've been really bad
+					reportingChan <- fmt.Errorf("failed to drain message: %w", drainErr)
+					return
+				}
+			}
+
+			if !isDrained {
+				// whatever the client sent must be malformed (no newline) or they're trying to be
+				// really annoying with a stupidly large message
+				oversizeErr := "disconnected client due to super bad request from client: failed to drain message\n"
+				fmt.Print(oversizeErr)
+				_, _ = fmt.Fprint(c, oversizeErr)
+				return
+			}
+
+			// don't want to hit that last clause in this function... might be bad :P
 			continue
 		}
 
-		// remove the automatic newline sent by the client
-		message := strings.TrimSuffix(string(line), "\n")
-
-		// perform encoding/decoding on client
-		transformedMessage := ctx.transformFunc(message)
-
-		fmt.Printf("message: %s, encoded: %s\n", message, transformedMessage)
-
-		// apparently we can use fmt.Fprintf instead of net.conn.Write since net.conn is a writer
-		// pretty neat....
-		// write the encoded (or decoded) response back to the client
-		_, err = fmt.Fprintf(c, "%s\n", transformedMessage)
-		if err != nil {
-			reportingChan <- fmt.Errorf("failed to write response: %w", err)
+		if readErr != nil {
+			// must've been some fatal error that happened with the reader
+			reportingChan <- fmt.Errorf("failed to read from client: %w", readErr)
 			return
 		}
 	}
@@ -182,9 +218,10 @@ func validateTransform(transformDirective string) (func(string) string, error) {
 // parse command line arguments, with defaults
 func parseArgs() (*ServerRuntimeContext, error) {
 	transformMode := flag.String("transform", ENCODE_FLAG, TRANSFORM_USAGE)
-	listenPort := flag.String("port", LISTEN_PORT, LISTEN_PORT_USAGE)
-	protocol := flag.String("proto", PROTO, PROTO_USAGE)
-	byteLimit := flag.Int("blimit", BYTE_LIMIT, BYTE_LIMIT_USAGE)
+	listenPort := flag.String("port", LISTEN_PORT_DEFAULT, LISTEN_PORT_USAGE)
+	protocol := flag.String("proto", PROTO_DEFAULT, PROTO_USAGE)
+	byteLimit := flag.Int("blimit", BYTE_LIMIT_DEFAULT, BYTE_LIMIT_USAGE)
+	maxDrainCount := flag.Int("maxdraincount", MAX_DRAIN_COUNT_DEFAULT, MAX_DRAIN_COUNT_USAGE)
 
 	flag.Parse()
 
@@ -201,6 +238,7 @@ func parseArgs() (*ServerRuntimeContext, error) {
 		listenPort:    *listenPort,
 		protocol:      *protocol,
 		byteLimit:     *byteLimit,
+		maxDrainCount: *maxDrainCount,
 	}, nil
 }
 

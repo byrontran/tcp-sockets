@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -13,17 +14,19 @@ import (
 
 const (
 	// default values
-	DEFAULT_MESSAGE = "Hello World"
-	BYTE_LIMIT      = 256
-	LISTEN_PORT     = ":8080"
-	PROTO           = "tcp"
-	INTERACTIVE     = false
+	MESSAGE_DEFAULT     = "Hello World"
+	BYTE_LIMIT_DEFAULT  = 256
+	LISTEN_PORT_DEFAULT = ":8080"
+	PROTO_DEFAULT       = "tcp"
+	INTERACTIVE_DEFAULT = false
+	COLOR_DEFAULT       = true
 	// usage flag help (shown with `-h` flag)
 	MESSAGE_USAGE     = "Pass a message (ASCII characters) to send to a server for encoding/decoding."
 	LISTEN_PORT_USAGE = "Configure port for client to connect to."
 	PROTO_USAGE       = "Configure protcool for client to connect with."
 	BYTE_LIMIT_USAGE  = "Adjust bytes expected by/from the server."
 	INTERACTIVE_USAGE = "Listen continously to user input."
+	COLOR_USAGE       = "Add ANSI formatting to the terminal output."
 )
 
 type ClientRuntimeContext struct {
@@ -32,6 +35,7 @@ type ClientRuntimeContext struct {
 	listenPort      string
 	byteLimit       int
 	interactiveMode bool
+	color           bool
 }
 
 func sendMessage(crContext ClientRuntimeContext, conn net.Conn) error {
@@ -46,16 +50,31 @@ func sendMessage(crContext ClientRuntimeContext, conn net.Conn) error {
 	}
 
 	// Prepare to accept the response of the server
-	buffer := make([]byte, crContext.byteLimit)
+	reader := bufio.NewReader(conn)
 
 	// read response from remote server
-	numBytes, err := conn.Read(buffer)
+	// probably should do some reasonable timeout because this will be a problem
+	// if the server forgets to add a newline
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	response, err := reader.ReadString('\n')
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return fmt.Errorf("server response timed out")
+		}
+
 		return fmt.Errorf("failed to read server response: %w", err)
 	}
 
+	// reset deadline
+	conn.SetDeadline(time.Time{})
+
 	// server response
-	fmt.Printf("Message returned: %s", string(buffer[:numBytes]))
+	if crContext.color {
+		fmt.Printf("\033[1m\033[33mMessage returned:\033[0m %s", response)
+	} else {
+		fmt.Printf("Message returned: %s", response)
+	}
 
 	return nil
 }
@@ -76,7 +95,12 @@ func runClient(crContext ClientRuntimeContext) error {
 		// interactive mode:
 		// take over the console, sending content of each line (up to `\n`) to server
 
-		fmt.Println("You are now in interactive mode. Please type your message:")
+		notice := "You are now in interactive mode. Please type your message:"
+		if crContext.color {
+			fmt.Printf("\033[1m\033[35m%s\033[0m\n", notice)
+		} else {
+			fmt.Println(notice)
+		}
 
 		stdIn := bufio.NewScanner(os.Stdin)
 
@@ -114,11 +138,12 @@ func runClient(crContext ClientRuntimeContext) error {
 
 // parse command line arguments, with defaults
 func parseArgs() *ClientRuntimeContext {
-	message := flag.String("message", DEFAULT_MESSAGE, MESSAGE_USAGE)
-	protcol := flag.String("proto", PROTO, PROTO_USAGE)
-	listenPort := flag.String("port", LISTEN_PORT, LISTEN_PORT_USAGE)
-	byteLimit := flag.Int("blimit", BYTE_LIMIT, BYTE_LIMIT_USAGE)
-	interactiveMode := flag.Bool("interactive", INTERACTIVE, INTERACTIVE_USAGE)
+	message := flag.String("message", MESSAGE_DEFAULT, MESSAGE_USAGE)
+	protcol := flag.String("proto", PROTO_DEFAULT, PROTO_USAGE)
+	listenPort := flag.String("port", LISTEN_PORT_DEFAULT, LISTEN_PORT_USAGE)
+	byteLimit := flag.Int("blimit", BYTE_LIMIT_DEFAULT, BYTE_LIMIT_USAGE)
+	interactiveMode := flag.Bool("interactive", INTERACTIVE_DEFAULT, INTERACTIVE_USAGE)
+	color := flag.Bool("color", COLOR_DEFAULT, COLOR_USAGE)
 
 	flag.Parse()
 
@@ -128,6 +153,7 @@ func parseArgs() *ClientRuntimeContext {
 		listenPort:      *listenPort,
 		byteLimit:       *byteLimit,
 		interactiveMode: *interactiveMode,
+		color:           *color,
 	}
 }
 
