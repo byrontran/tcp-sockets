@@ -36,6 +36,10 @@ type ClientRuntimeContext struct {
 
 func sendMessage(crContext ClientRuntimeContext, conn net.Conn) error {
 	// push message to remote server
+
+	// the write to the server here needs a `\n` to guarantee that the server
+	// bothers to parse it (especially in one-shot that doesn't use newlines)
+	// instead of just reading it infinitely
 	_, err := fmt.Fprintf(conn, "%s\n", crContext.message)
 	if err != nil {
 		return fmt.Errorf("failed to write to remote server: %w", err)

@@ -42,7 +42,7 @@ func handleUserResponse(ctx ServerRuntimeContext, c net.Conn, reportingChan chan
 	defer func() {
 		// if there is an error (i.e. function hit a != nil check and returned early), report it
 		if err != nil {
-			reportingChan <- err // reportingChan kyou mou kawaii~!!
+			reportingChan <- err // reportingChan wa kyou mou kawaii~!!
 		}
 
 		// close the connection cleanly, or if that fails, report it
@@ -108,7 +108,10 @@ func runServer(srContext ServerRuntimeContext) error {
 
 	fmt.Printf("%s server listening on %s with transform directive: [%s]\n", srContext.protocol, srContext.listenPort, srContext.transformMode)
 
-	reportingChannel := make(chan error, 10) // arbitrary buffer size for formatting goroutine errors
+	// chose arbitrary buffer size for formatting goroutine errors
+	// not sure if it really matters but I figured 10 should be enough if there's
+	// more than one connection that was shunted to a goroutine
+	reportingChannel := make(chan error, 10)
 
 	// teardown logic for the listener
 	defer func() {
